@@ -5,48 +5,38 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  # Allow manual trigger
   workflow_dispatch:
 
 jobs:
   build:
     name: Build .nds with devkitPro
     runs-on: ubuntu-latest
+    # Official devkitPro Docker image — includes devkitARM, libnds, libfat
+    container: devkitpro/devkitarm:latest
 
     steps:
       # ── 1. Checkout source ──────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Install devkitPro (devkitARM + libnds + libfat) ─────────
-      - name: Install devkitPro
-        run: |
-          # Add devkitPro package repository
-          wget https://apt.devkitpro.org/install-devkitpro-pacman
-          chmod +x install-devkitpro-pacman
-          sudo ./install-devkitpro-pacman
+      # ── 2. Install NDS-specific libraries ───────────────────────────
+      - name: Install nds-dev
+        run: dkp-pacman --noconfirm -S nds-dev
 
-          # Install Nintendo DS toolchain
-          sudo dkp-pacman --noconfirm -S nds-dev
-
-      # ── 3. Set environment variables ────────────────────────────────
-      - name: Set devkitPro environment
-        run: |
-          echo "DEVKITPRO=/opt/devkitpro"             >> $GITHUB_ENV
-          echo "DEVKITARM=/opt/devkitpro/devkitARM"   >> $GITHUB_ENV
-          echo "PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitARM/bin:$PATH" >> $GITHUB_ENV
-
-      # ── 4. Build ────────────────────────────────────────────────────
+      # ── 3. Build ────────────────────────────────────────────────────
       - name: Build
+        env:
+          DEVKITPRO: /opt/devkitpro
+          DEVKITARM: /opt/devkitpro/devkitARM
         run: make
 
-      # ── 5. Verify the .nds was produced ────────────────────────────
+      # ── 4. Verify the .nds was produced ────────────────────────────
       - name: Verify output
         run: |
           ls -lh haunted_house_ds.nds
           echo "Build successful ✓"
 
-      # ── 6. Upload artifact ──────────────────────────────────────────
+      # ── 5. Upload artifact ──────────────────────────────────────────
       - name: Upload .nds
         uses: actions/upload-artifact@v4
         with:
