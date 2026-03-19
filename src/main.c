@@ -17,11 +17,20 @@
 #include "video.h"
 #include "input.h"
 
-/* ---- ROM path on the SD card ---- */
-#define ROM_PATH   "fat:/data/haunted_house.a26"
-#define ROM_SIZE   4096   /* Haunted House is a 4 KB ROM */
+/* ---- ROM size ---- */
+#define ROM_SIZE   4096
 
 static uint8_t rom_data[ROM_SIZE];
+
+/* TWiLight Menu++ and different flashcart loaders mount the SD
+ * under different prefixes. We try them all in order. */
+static const char *ROM_PATHS[] = {
+    "fat:/data/haunted_house.a26",
+    "sd:/data/haunted_house.a26",
+    "/data/haunted_house.a26",
+    "nitro:/data/haunted_house.a26",
+    NULL
+};
 
 /* ------------------------------------------------------------------ */
 static bool load_rom(const char *path)
@@ -72,9 +81,16 @@ int main(void)
         return 1;
     }
 
-    /* Load ROM from SD */
-    if (!load_rom(ROM_PATH)) {
-        show_error("ROM not found or wrong size.\nExpected 4096 bytes.");
+    /* Load ROM from SD - try multiple mount points */
+    bool rom_loaded = false;
+    for (int i = 0; ROM_PATHS[i] != NULL; i++) {
+        if (load_rom(ROM_PATHS[i])) {
+            rom_loaded = true;
+            break;
+        }
+    }
+    if (!rom_loaded) {
+        show_error("ROM not found!\nPlace 4096-byte ROM at:\nsd:/data/haunted_house.a26");
         return 1;
     }
 
