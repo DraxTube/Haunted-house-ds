@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 
 /*
  * input.h  —  DS button → Atari 2600 joystick/switch mapping
