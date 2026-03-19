@@ -13,6 +13,10 @@
 #include <nds.h>
 #include <string.h>
 
+/* ---- forward declarations ---------------------------------------- */
+static void blit_to_ds(void);
+static void render_scanline(int line, TIAState *t);
+
 /* ---- Atari 2600 NTSC palette -> BGR555 -------------------------- */
 static const uint16_t atari_palette[128] = {
     /* Grey scale */
@@ -65,33 +69,6 @@ static const uint16_t atari_palette[128] = {
     RGB15(31,31,31), RGB15(31,31,31), RGB15(31,31,31), RGB15(31,31,31),
 };
 
-/* Frame buffer - 160 pixels wide × 192 lines */
-#define ATARI_W  160
-#define ATARI_H  192
-static uint16_t framebuf[ATARI_W * ATARI_H];
-
-/* DS main screen VRAM pointer (mode 5, framebuffer) */
-static uint16_t *main_vram = NULL;
-static uint16_t *sub_vram  = NULL;
-
-/* ------------------------------------------------------------------ */
-void video_init(void)
-{
-    /* Top screen: bitmap mode for easy pixel writes */
-    videoSetMode(MODE_FB0);
-    vramSetBankA(VRAM_A_LCD);
-    main_vram = VRAM_A;
-
-    /* Bottom screen: tile mode for HUD */
-    videoSetModeSub(MODE_0_2D);
-    vramSetBankC(VRAM_C_SUB_BG);
-    sub_vram = VRAM_C;
-
-    /* Clear screens */
-    memset(main_vram, 0, 256*192*2);
-    memset(sub_vram,  0, 256*192*2);
-}
-
 /* Convert a TIA colour byte to BGR555 */
 static inline uint16_t tia_colour(uint8_t c)
 {
@@ -108,11 +85,8 @@ static void render_scanline(int line, TIAState *t)
 
     uint16_t *row = framebuf + line * ATARI_W;
 
-    /* Fill with background */
     for (int x = 0; x < ATARI_W; x++) row[x] = bg;
 
-    /* Playfield (20 bits per half, reflected or mirrored) */
-    /* PF0 bit 4-7, PF1 bit 7-0, PF2 bit 0-7 */
     uint32_t pf_bits = ((t->pf0 >> 4) & 0xF) |
                        ((uint32_t)t->pf1 << 4) |
                        ((uint32_t)t->pf2 << 12);
@@ -123,14 +97,12 @@ static void render_scanline(int line, TIAState *t)
             for (int i = 0; i < 4 && x+i < ATARI_W/2; i++) row[x+i] = pf;
         }
     }
-    /* Right half: mirror or repeat */
     bool mirror = (t->ctrlpf & 0x01);
     for (int x = ATARI_W/2; x < ATARI_W; x++) {
         int src = mirror ? (ATARI_W - 1 - x) : (x - ATARI_W/2);
         row[x] = row[src];
     }
 
-    /* Player 0 (8 pixels wide) */
     uint8_t grp = t->grp0;
     int px0 = t->x_p0 & (ATARI_W-1);
     for (int b = 0; b < 8; b++) {
@@ -140,7 +112,6 @@ static void render_scanline(int line, TIAState *t)
         }
     }
 
-    /* Player 1 */
     grp = t->grp1;
     int px1 = t->x_p1 & (ATARI_W-1);
     for (int b = 0; b < 8; b++) {
@@ -151,27 +122,52 @@ static void render_scanline(int line, TIAState *t)
     }
 }
 
-/* Scale the 160×192 framebuf to the 256×192 DS screen */
-static void blit_to_ds(void)
+#define ATARI_W  160
+#define ATARI_H  192
+static uint16_t framebuf[ATARI_W * ATARI_H];
+
+static int main_bg = -1;
+
+/* ------------------------------------------------------------------ */
+void video_init(void)
 {
-    /* Simple nearest-neighbour 1.6x horizontal scale */
-    for (int y = 0; y < 192; y++) {
-        uint16_t *src = framebuf + y * ATARI_W;
-        uint16_t *dst = main_vram + y * 256;
-        for (int x = 0; x < 256; x++) {
-            dst[x] = src[(x * ATARI_W) / 256];
-        }
-    }
+    videoSetMode(MODE_5_2D);
+    vramSetBankA(VRAM_A_MAIN_BG);
+
+    main_bg = bgInit(2, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
+    bgSetPriority(main_bg, 0);
+    bgShow(main_bg);
+
+    videoSetModeSub(MODE_5_2D);
+    vramSetBankC(VRAM_C_SUB_BG);
+    bgInitSub(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
+
+    dmaFillHalfWords(0, bgGetGfxPtr(main_bg), 256*192*2);
+
+    swiWaitForVBlank();
+    swiWaitForVBlank();
 }
 
+/* ------------------------------------------------------------------ */
 void video_render(void)
 {
     TIAState *t = tia_get_state();
 
-    /* Render all visible scanlines */
     for (int line = 0; line < ATARI_H; line++)
         render_scanline(line, t);
 
-    /* Blit to DS VRAM */
     blit_to_ds();
+}
+
+static void blit_to_ds(void)
+{
+    uint16_t *dst = bgGetGfxPtr(main_bg);
+
+    for (int y = 0; y < ATARI_H; y++) {
+        uint16_t *src = framebuf + y * ATARI_W;
+        uint16_t *row = dst + y * 256;
+        for (int x = 0; x < 256; x++) {
+            row[x] = src[(x * ATARI_W) / 256];
+        }
+    }
 }
