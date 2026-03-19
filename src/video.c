@@ -1,23 +1,24 @@
 /*
  * video.c  —  DS video rendering
  *
- * The TIA produces a 160×192 pixel NTSC frame (160 visible pixels × 192 scanlines).
- * We scale it to fill the DS top screen (256×192) using a simple 1.6× horizontal stretch.
- *
- * Atari colour palette: 128 entries (bits 7-1 of the colour byte).
- * Each entry is mapped to a 15-bit BGR555 DS colour.
+ * TIA output: 160x192 pixels, NTSC palette (128 colours, BGR555).
+ * Scaled to 256x192 on the DS top screen via nearest-neighbour.
  */
 
 #include "video.h"
 #include "tia.h"
 #include <nds.h>
 #include <string.h>
+#include <stdbool.h>
 
-/* ---- forward declarations ---------------------------------------- */
-static void blit_to_ds(void);
-static void render_scanline(int line, TIAState *t);
+/* ---- Constants and framebuffer (before any function that uses them) ------- */
+#define ATARI_W  160
+#define ATARI_H  192
 
-/* ---- Atari 2600 NTSC palette -> BGR555 -------------------------- */
+static uint16_t framebuf[ATARI_W * ATARI_H];
+static int      main_bg = -1;
+
+/* ---- Atari 2600 NTSC palette -> BGR555 ----------------------------------- */
 static const uint16_t atari_palette[128] = {
     /* Grey scale */
     RGB15( 0, 0, 0), RGB15( 4, 4, 4), RGB15( 8, 8, 8), RGB15(12,12,12),
@@ -69,13 +70,13 @@ static const uint16_t atari_palette[128] = {
     RGB15(31,31,31), RGB15(31,31,31), RGB15(31,31,31), RGB15(31,31,31),
 };
 
-/* Convert a TIA colour byte to BGR555 */
+/* ---- Internal functions -------------------------------------------------- */
+
 static inline uint16_t tia_colour(uint8_t c)
 {
     return atari_palette[(c >> 1) & 0x7F];
 }
 
-/* Draw one scanline into framebuf */
 static void render_scanline(int line, TIAState *t)
 {
     uint16_t bg = tia_colour(t->colubk);
@@ -85,78 +86,46 @@ static void render_scanline(int line, TIAState *t)
 
     uint16_t *row = framebuf + line * ATARI_W;
 
+    /* Background fill */
     for (int x = 0; x < ATARI_W; x++) row[x] = bg;
 
-    uint32_t pf_bits = ((t->pf0 >> 4) & 0xF) |
-                       ((uint32_t)t->pf1 << 4) |
-                       ((uint32_t)t->pf2 << 12);
+    /* Playfield: PF0[4:7] | PF1[7:0] | PF2[0:7] = 20 bits left half */
+    uint32_t pf_bits = ((t->pf0 >> 4) & 0xF)
+                     | ((uint32_t)t->pf1 << 4)
+                     | ((uint32_t)t->pf2 << 12);
 
     for (int bit = 0; bit < 20; bit++) {
         if (pf_bits & (1u << bit)) {
             int x = bit * 4;
-            for (int i = 0; i < 4 && x+i < ATARI_W/2; i++) row[x+i] = pf;
+            for (int i = 0; i < 4 && (x + i) < ATARI_W / 2; i++)
+                row[x + i] = pf;
         }
     }
-    bool mirror = (t->ctrlpf & 0x01);
-    for (int x = ATARI_W/2; x < ATARI_W; x++) {
-        int src = mirror ? (ATARI_W - 1 - x) : (x - ATARI_W/2);
+
+    /* Right half: mirrored or repeated */
+    bool mirror = (t->ctrlpf & 0x01) != 0;
+    for (int x = ATARI_W / 2; x < ATARI_W; x++) {
+        int src = mirror ? (ATARI_W - 1 - x) : (x - ATARI_W / 2);
         row[x] = row[src];
     }
 
-    uint8_t grp = t->grp0;
-    int px0 = t->x_p0 & (ATARI_W-1);
+    /* Player 0 — 8 pixels */
+    int px0 = t->x_p0 & (ATARI_W - 1);
     for (int b = 0; b < 8; b++) {
-        if (grp & (0x80 >> b)) {
+        if (t->grp0 & (0x80 >> b)) {
             int x = px0 + b;
             if (x < ATARI_W) row[x] = p0;
         }
     }
 
-    grp = t->grp1;
-    int px1 = t->x_p1 & (ATARI_W-1);
+    /* Player 1 — 8 pixels */
+    int px1 = t->x_p1 & (ATARI_W - 1);
     for (int b = 0; b < 8; b++) {
-        if (grp & (0x80 >> b)) {
+        if (t->grp1 & (0x80 >> b)) {
             int x = px1 + b;
             if (x < ATARI_W) row[x] = p1;
         }
     }
-}
-
-#define ATARI_W  160
-#define ATARI_H  192
-static uint16_t framebuf[ATARI_W * ATARI_H];
-
-static int main_bg = -1;
-
-/* ------------------------------------------------------------------ */
-void video_init(void)
-{
-    videoSetMode(MODE_5_2D);
-    vramSetBankA(VRAM_A_MAIN_BG);
-
-    main_bg = bgInit(2, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
-    bgSetPriority(main_bg, 0);
-    bgShow(main_bg);
-
-    videoSetModeSub(MODE_5_2D);
-    vramSetBankC(VRAM_C_SUB_BG);
-    bgInitSub(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
-
-    dmaFillHalfWords(0, bgGetGfxPtr(main_bg), 256*192*2);
-
-    swiWaitForVBlank();
-    swiWaitForVBlank();
-}
-
-/* ------------------------------------------------------------------ */
-void video_render(void)
-{
-    TIAState *t = tia_get_state();
-
-    for (int line = 0; line < ATARI_H; line++)
-        render_scanline(line, t);
-
-    blit_to_ds();
 }
 
 static void blit_to_ds(void)
@@ -166,8 +135,41 @@ static void blit_to_ds(void)
     for (int y = 0; y < ATARI_H; y++) {
         uint16_t *src = framebuf + y * ATARI_W;
         uint16_t *row = dst + y * 256;
-        for (int x = 0; x < 256; x++) {
+        for (int x = 0; x < 256; x++)
             row[x] = src[(x * ATARI_W) / 256];
-        }
     }
+}
+
+/* ---- Public API ---------------------------------------------------------- */
+
+void video_init(void)
+{
+    /* Top screen — MODE_5_2D, BG2 as 16-bit bitmap */
+    videoSetMode(MODE_5_2D);
+    vramSetBankA(VRAM_A_MAIN_BG);
+
+    main_bg = bgInit(2, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
+    bgSetPriority(main_bg, 0);
+    bgShow(main_bg);
+
+    /* Bottom screen — solid black */
+    videoSetModeSub(MODE_5_2D);
+    vramSetBankC(VRAM_C_SUB_BG);
+    bgInitSub(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
+
+    /* Clear VRAM to black before first frame */
+    dmaFillHalfWords(0, bgGetGfxPtr(main_bg), 256 * 192 * 2);
+
+    swiWaitForVBlank();
+    swiWaitForVBlank();
+}
+
+void video_render(void)
+{
+    TIAState *t = tia_get_state();
+
+    for (int line = 0; line < ATARI_H; line++)
+        render_scanline(line, t);
+
+    blit_to_ds();
 }
