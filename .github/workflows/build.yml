@@ -1,0 +1,92 @@
+name: Build Haunted House DS
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build .nds with devkitPro
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout source ──────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Install devkitPro (devkitARM + libnds + libfat) ─────────
+      - name: Install devkitPro
+        run: |
+          # Add devkitPro package repository
+          wget https://apt.devkitpro.org/install-devkitpro-pacman
+          chmod +x install-devkitpro-pacman
+          sudo ./install-devkitpro-pacman
+
+          # Install Nintendo DS toolchain
+          sudo dkp-pacman --noconfirm -S nds-dev
+
+      # ── 3. Set environment variables ────────────────────────────────
+      - name: Set devkitPro environment
+        run: |
+          echo "DEVKITPRO=/opt/devkitpro"             >> $GITHUB_ENV
+          echo "DEVKITARM=/opt/devkitpro/devkitARM"   >> $GITHUB_ENV
+          echo "PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitARM/bin:$PATH" >> $GITHUB_ENV
+
+      # ── 4. Build ────────────────────────────────────────────────────
+      - name: Build
+        run: make
+
+      # ── 5. Verify the .nds was produced ────────────────────────────
+      - name: Verify output
+        run: |
+          ls -lh haunted_house_ds.nds
+          echo "Build successful ✓"
+
+      # ── 6. Upload artifact ──────────────────────────────────────────
+      - name: Upload .nds
+        uses: actions/upload-artifact@v4
+        with:
+          name: haunted_house_ds
+          path: haunted_house_ds.nds
+          retention-days: 30
+
+  # ── Optional: create a GitHub Release on tags ─────────────────────
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: haunted_house_ds
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: haunted_house_ds.nds
+          body: |
+            ## Haunted House DS
+
+            NDS homebrew port of Haunted House (Atari 2600, 1982).
+
+            ### How to use
+            1. Copy `haunted_house_ds.nds` to your flashcart SD card.
+            2. Create a `data/` folder on the SD card root.
+            3. Place your Atari 2600 ROM as `data/haunted_house.a26` (4096 bytes).
+            4. Launch `haunted_house_ds.nds` from your flashcart menu.
+
+            ### Controls
+            | DS Button | Atari |
+            |-----------|-------|
+            | D-Pad     | Joystick |
+            | A / B     | Fire |
+            | START     | Game Reset |
+            | SELECT    | Game Select |
+            | L / R     | Difficulty switches |
