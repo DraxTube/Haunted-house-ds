@@ -266,8 +266,8 @@ int emu6502_step(void)
     case 0x4C: cpu.pc=fetch16(); cyc=3; break;
     case 0x6C: { uint16_t ptr=fetch16(); cpu.pc=emu6502_read(ptr)|(emu6502_read((ptr&0xFF00)|((ptr+1)&0xFF))<<8); cyc=5; } break;
     case 0x20: addr=fetch16(); PUSH((cpu.pc-1)>>8); PUSH((cpu.pc-1)&0xFF); cpu.pc=addr; cyc=6; break;
-    case 0x60: cpu.pc=(POP()|(POP()<<8))+1; cyc=6; break;
-    case 0x40: cpu.p=POP(); cpu.pc=POP()|(POP()<<8); cyc=6; break;
+    case 0x60: { uint8_t lo = POP(); uint8_t hi = POP(); cpu.pc = (lo | ((uint16_t)hi << 8)) + 1; cyc=6; } break;
+    case 0x40: { cpu.p = POP(); uint8_t lo = POP(); uint8_t hi = POP(); cpu.pc = lo | ((uint16_t)hi << 8); cyc=6; } break;
     /* ----- Flags ----- */
     case 0x18: cpu.p &= ~FLAG_C; break;
     case 0x38: cpu.p |=  FLAG_C; break;
